@@ -15,9 +15,11 @@ import cv2
 import numpy as np
 
 #vars
-last_incident_time = 0
+last_frame_incident_time = 0
+last_zone_incident_time = 0
 min_time_since_last_incident = 30
-person_already_detected = False
+person_already_detected_in_frame = False
+person_already_detected_in_zone = False
 detection_zone_color = (0,255,0)
 confidence_threshold = 0.3
 object_detection_enabled = True
@@ -86,43 +88,52 @@ while True:
 	frameData = frame['data']
 	camera_settings = frame['camera']
 	frameData = imutils.resize(frameData, width=400)	
-	(h, w) = frameData.shape[:2]
+	(h, w) = frameData.shape[:2]	
 
 	if camera_settings['isDetectionEnabled'] == True:		
 		blob = cv2.dnn.blobFromImage(cv2.resize(frameData, (300, 300)),	0.007843, (300, 300), 127.5)
 		net.setInput(blob)
-		detections = net.forward()	
+		detections = net.forward()
+		detected_obj_box_color = (0,0,0)	
 		for i in np.arange(0, detections.shape[2]):		
 			confidence = detections[0, 0, i, 2]		
 			if confidence > confidence_threshold:			
 				detection_id = int(detections[0, 0, i, 1])
 				detected_obj_box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
-				(startX, startY, endX, endY) = detected_obj_box.astype("int")
-				print(camera_settings['zoneWidth'] * w )
+				(startX, startY, endX, endY) = detected_obj_box.astype("int")				
 				zone_start_x = int(camera_settings['zoneX'] * w)
 				zone_start_y = int(camera_settings['zoneY'] * h)
-				zone_end_x = int(camera_settings['zoneWidth'] * w)
-				zone_end_y = int(camera_settings['zoneHeight'] * h)
-				detection_zone_box = [zone_start_x, zone_start_y, zone_end_x, zone_end_y]
-				#(zone_start_x, zone_start_y, zone_end_x, zone_end_y) = detection_zone_box				
+				zone_end_x = int(zone_start_x + camera_settings['zoneWidth'] * w)
+				zone_end_y = int(zone_start_y + camera_settings['zoneHeight'] * h)
+				detection_zone_box = [zone_start_x, zone_start_y, zone_end_x, zone_end_y]				
 				# if is person
 				if detection_classes[detection_id] is 'person':	
 					# if person is within defined motion zone
-					if intersects(detection_zone_box, detected_obj_box): #person is inside detection zone
-						detected_obj_box_color = (0,0,255)	
-						if person_already_detected is False:  #only send notification at beginning of new detection incident
+					if person_already_detected_in_frame is False:  #only send notification at beginning of new detection incident
+						current_time = int(time.time())
+						time_since_last_frame_detection  = current_time - last_frame_incident_time
+						if (time_since_last_frame_detection > 60): 
+							current_image_folder = get_current_image_folder()      
+							print('person detected in frame. Send mqtt message!')
+							print("publishing ")
+							publish_mqtt_message('camera/detection/frame/' + camera_settings['name'])                        
+							person_already_detected_in_frame = True	
+						last_frame_incident_time = int(time.time())
+						
+					
+					if person_already_detected_in_zone is False:  #only send notification at beginning of new detection incident
+						if intersects(detection_zone_box, detected_obj_box): #person is inside detection zone
+							detected_obj_box_color = (0,0,255)	
 							current_time = int(time.time())
-							time_since_last_detection  = current_time - last_incident_time
-							if (time_since_last_detection > 60): 
-								current_image_folder = get_current_image_folder()      
-								print('person detected. Send mqtt message!')
+							time_since_last_zone_detection  = current_time - last_zone_incident_time
+							if (time_since_last_zone_detection > 60): 								 
+								print('person detected in zone. Send mqtt message!')
 								print("publishing ")
-								publish_mqtt_message('camera/person-detected')                        
-								person_already_detected = True	
-						last_incident_time = int(time.time())    				 
-
-					else:
-						detected_obj_box_color = (0,0,0)
+								publish_mqtt_message('camera/detection/zone/' + camera_settings['name'])                        
+								person_already_detected_in_zone = True	
+							last_zone_incident_time = int(time.time())						
+					
+						
 					#label = "{}: {:.2f}%".format(CLASSES[detection_id],	confidence * 100)
 					#cv2.imwrite(current_image_folder +  '/frame%d.jpg' %count, frameData) 
 					cv2.rectangle(frameData, (startX, startY), (endX, endY), detected_obj_box_color, 1)						
@@ -131,7 +142,8 @@ while True:
 					#cv2.putText(frameData, label, (startX, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,0), 2)	
 				else:
 					# todo check multiple frames before resetting this as precaution
-					person_already_detected = False		
+					person_already_detected_in_frame = False
+					person_already_detected_in_zone = False		
 			
 			#ret_code, jpg_buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 95])     
 			#client.publish("camera/image/inference",bytes(jpg_buffer),0) 			
